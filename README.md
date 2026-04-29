@@ -95,11 +95,19 @@ To ensure high availability and fault isolation, the background workload is segm
 OrderFlow Resilience Engine coordinates distributed order processing across Billing, Inventory, and Logistics using a strict saga state machine with deterministic compensation. It eliminates partial-commit drift by enforcing idempotent intake, bounded retries, and recovery workflows for long-running failures.
 
 > **Business Value:** Prevents financial mismatch, inventory distortion, and fulfillment leakage when downstream services fail after order acceptance.<br/>
-> **RED + Reliability Metrics (Prometheus/Grafana):** <kbd>Rate</kbd> saga_execution_total and saga_step_execution_total, <kbd>Errors</kbd> compensation failures and manual-intervention backlog, <kbd>Duration</kbd> saga_step_duration_seconds and API p99 latency.
+> **RED + Reliability Metrics (Prometheus + Grafana):** <kbd>Rate</kbd> saga_execution_total and saga_step_execution_total, <kbd>Errors</kbd> compensation failures and manual-intervention backlog, <kbd>Duration</kbd> saga_step_duration_seconds and API p99 latency.
 
 #### Architecture
 
-Requests enter through Nginx to FastAPI, where payloads are validated, idempotency keys are enforced, and order aggregates are persisted in PostgreSQL. Redis-backed ARQ queues drive asynchronous saga execution: billing runs first, then inventory and logistics execute in parallel; any failure transitions the order to compensating flow. Scheduler workers detect stale processing/compensation states, re-dispatch recovery, and escalate unresolved workflows to manual intervention. Prometheus metrics and Grafana dashboards provide business and platform observability across API and workers.
+Requests enter through Nginx to FastAPI, which handles payload validation, enforces idempotency keys, and persists order aggregates in PostgreSQL. Redis functions as the ARQ message broker driving the distributed state machine.
+
+To ensure strict consistency and recovery, the workload is divided:
+* **Saga Worker:** Executes the primary workflow (billing runs first, followed by concurrent inventory and logistics tasks). Any failure instantly transitions the order into a deterministic compensation flow (rollback).
+* **Scheduler Worker:** Runs autonomous reconciliation loops to detect stale states or stuck compensations, re-dispatches recovery tasks, and escalates exhausted workflows to a manual intervention queue.
+
+**Observability Stack:** Prometheus actively scrapes system health and business RED metrics from the FastAPI layer, background workers, and infrastructure exporters (Postgres, Redis, Node). The entire pipeline is visualized in Grafana.
+
+*C4 diagrams (C1, C2-Core, C2-Observability) and the detailed architectural document are available in the repository.*
 
 <table>
   <tr>
