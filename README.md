@@ -39,14 +39,23 @@
 
 ### 🛡️ [Watchdog HTTP](https://github.com/DarcRosya/watchdog-http) | Event-Driven Uptime Monitoring and Incident Alerting Platform
 
-Watchdog HTTP is an asynchronous monitoring platform that continuously probes HTTP/S endpoints, persists time-series check history, and dispatches incident alerts through Telegram. It is designed to reduce detection lag, suppress alert noise, and keep incident communication reliable under unstable network conditions.
+Watchdog HTTP is an asynchronous uptime and HTTP performance monitoring system built around a FastAPI API and ARQ background workers. It continuously probes HTTP/S endpoints, persists time-series check history, and dispatches incident alerts through Telegram while suppressing alert noise under unstable network conditions.
 
-> **Business Value:** Reduces mean time to detection and lowers outage impact by converting raw endpoint behavior into actionable incident workflows for operators.<br/>
-> **Operational Indicators (Streamlit UI):** <kbd>Rate</kbd> scheduled and executed checks over time, <kbd>Errors</kbd> failed checks and incident count, <kbd>Duration</kbd> probe duration (duration_ms) and latency trends from persisted check logs.
+> **Business Value:** Reduces mean time to detection and lowers outage impact by converting raw check data into actionable, deduplicated incident workflows for operators.<br/>
+> **Operational Indicators (Prometheus + Grafana):** <kbd>Rate</kbd> scheduled checks, executed checks, and queue depth, <kbd>Errors</kbd> failed checks and alert count, <kbd>Duration</kbd> probe latency and worker runtime, with worker metrics pushed via Pushgateway.
 
 #### Architecture
 
-FastAPI manages monitor lifecycle, API-key auth, and stats endpoints while Redis serves as both the ARQ broker and operational state store. A scheduler worker scans due monitors from a Redis sorted set and enqueues probe jobs; monitoring workers execute async HTTP/TLS checks and persist results in TimescaleDB/PostgreSQL; alerting workers send Telegram notifications from a separate queue so delivery latency never backpressures monitoring. Operator visibility is delivered through persisted logs/history and Streamlit dashboards.
+FastAPI manages the monitor lifecycle, API-key authentication, and telemetry endpoints. Redis functions dually as the ARQ message broker and the operational state store (caching monitor configs, failure counters, and last-check timestamps).
+
+To ensure high availability and fault isolation, the background workload is segmented:
+* **Scheduler:** Scans a Redis sorted set for due monitors and enqueues probe jobs with strict rate limits to prevent thundering herd issues.
+* **Monitoring Workers:** Execute asynchronous HTTP/TLS probes via `httpx`, persist time-series `ResultLog` data in TimescaleDB, and update the shared Redis state.
+* **Alerting Workers:** Operate on an entirely separate queue. This critical design choice guarantees that external delivery latency (e.g., Telegram API rate limits or outages) never backpressures the core monitoring throughput.
+
+**Observability Stack:** Prometheus actively scrapes metrics from the FastAPI layer, while ephemeral ARQ workers push custom telemetry to a Pushgateway. All data is aggregated and visualized in Grafana.
+
+*C4 diagrams (C1, C2-Core, C2-Observability, C3-API) are available in the repository to rigorously document the system context, runtime components, observability pipeline, and API boundaries.*
 
 <table>
   <tr>
@@ -59,19 +68,23 @@ FastAPI manages monitor lifecycle, API-key auth, and stats endpoints while Redis
   </tr>
   <tr>
     <td><strong>Anti-Flapping State Intelligence</strong></td>
-    <td>Consecutive failure counters and transition-aware rules suppress transient noise while preserving true first-failure and valid recovery alerts.</td>
+    <td>Failure counters with TTL and transition-aware rules suppress transient noise while preventing stale recovery alerts.</td>
   </tr>
   <tr>
-    <td><strong>Resilient Cache-First Path</strong></td>
-    <td>Monitor configuration is fetched from Redis first with database fallback and automatic cache repopulation for continuity under cache churn.</td>
+    <td><strong>Distributed Cache Hydration Lock</strong></td>
+    <td>Redis SET NX lock prevents concurrent cache rehydration; monitor config cache falls back to the database and repopulates on miss.</td>
   </tr>
   <tr>
-    <td><strong>Throughput-Oriented Async Runtime</strong></td>
-    <td>Pooled async HTTP clients, explicit timeout budgets, and scheduler caps sustain high-volume checks without unbounded queue growth.</td>
+    <td><strong>Backlog-Aware Scheduling</strong></td>
+    <td>Scheduler caps due checks per tick and records backlog and queue depth metrics to avoid runaway growth.</td>
+  </tr>
+  <tr>
+    <td><strong>SSL Expiry Guardrails</strong></td>
+    <td>HTTPS monitors are checked at most once per day with Redis TTL dedupe to avoid alert spam.</td>
   </tr>
   <tr>
     <td><strong>Operational Forensics by Design</strong></td>
-    <td>Each check persists start time, duration, status code, success flag, and error context, enabling reliable post-incident reconstruction.</td>
+    <td>Each check persists start time, duration, status code, success flag, and error context for post-incident reconstruction.</td>
   </tr>
 </table>
 
